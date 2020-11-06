@@ -877,34 +877,6 @@ StorePathSet LocalStore::queryValidDerivers(const StorePath & path)
     });
 }
 
-// Try to resolve the derivation at path `original`, with a caching layer
-// to make it more efficient
-std::optional<StorePath> cachedResolve(
-    LocalStore & store,
-    const StorePath & original)
-{
-    {
-        auto resolutions = drvPathResolutions.lock();
-        auto resolvedPathOptIter = resolutions->find(original);
-        if (resolvedPathOptIter != resolutions->end()) {
-            auto & [_, resolvedPathOpt] = *resolvedPathOptIter;
-            if (resolvedPathOpt)
-                return resolvedPathOpt;
-        }
-    }
-
-    /* Try resolve drv and use that path instead. */
-    auto drv = store.readDerivation(original);
-    auto attempt = drv.tryResolve(store);
-    if (!attempt)
-        return std::nullopt;
-    /* Just compute store path */
-    auto pathResolved =
-        writeDerivation(store, *std::move(attempt), NoRepair, true);
-    /* Store in memo table. */
-    drvPathResolutions.lock()->insert_or_assign(original, pathResolved);
-    return pathResolved;
-}
 
 std::map<std::string, std::optional<StorePath>>
 LocalStore::queryPartialDerivationOutputMap(const StorePath& path_)
@@ -932,29 +904,27 @@ LocalStore::queryPartialDerivationOutputMap(const StorePath& path_)
         return outputs;
 
     auto drv = readDerivation(path);
-
-    for (auto & output : drv.outputsAndOptPaths(*this)) {
-        outputs.emplace(output.first, std::nullopt);
+    for (auto & [outName, _] : drv.outputs) {
+        if (!outputs.count(outName))
+            outputs.insert_or_assign(outName, std::nullopt);
     }
 
-    auto resolvedDrv = cachedResolve(*this, path);
-
-    if (!resolvedDrv)
-        return outputs;
-
-    retrySQLite<void>([&]() {
+    return retrySQLite<std::map<std::string, std::optional<StorePath>>>([&]() {
         auto state(_state.lock());
-        path = *resolvedDrv;
-        auto useQueryDerivationOutputs{
-            state->stmts->QueryAllRealisedOutputs.use()(path.to_string())};
+
+        auto useQueryDerivationOutputs {
+            state->stmts->QueryAllRealisedOutputs.use()
+            (path.to_string())
+        };
 
         while (useQueryDerivationOutputs.next())
             outputs.insert_or_assign(
                 useQueryDerivationOutputs.getStr(0),
-                parseStorePath(useQueryDerivationOutputs.getStr(1)));
-    });
+                parseStorePath(useQueryDerivationOutputs.getStr(1))
+            );
 
-    return outputs;
+        return outputs;
+    });
 }
 
 std::optional<StorePath> LocalStore::queryPathFromHashPart(const std::string & hashPart)
@@ -1700,9 +1670,8 @@ std::optional<const Realisation> LocalStore::queryRealisation(
         if (!use.next())
             return std::nullopt;
         auto outputPath = parseStorePath(use.getStr(0));
-        auto resolvedDrv = StorePath(use.getStr(1));
-        return Ret{
-            Realisation{.id = id, .outPath = outputPath}};
+        return Ret{Realisation{.id = id, .outPath = outputPath}};
     });
 }
+
 }  // namespace nix
