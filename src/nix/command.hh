@@ -139,7 +139,7 @@ private:
 };
 
 /* A command that operates on zero or more store paths. */
-struct StorePathsCommand : public InstallablesCommand
+struct RealisedPathsCommand : public InstallablesCommand
 {
 private:
 
@@ -152,15 +152,26 @@ protected:
 
 public:
 
-    StorePathsCommand(bool recursive = false);
+    RealisedPathsCommand(bool recursive = false);
 
     using StoreCommand::run;
 
-    virtual void run(ref<Store> store, std::vector<StorePath> storePaths) = 0;
+    virtual void run(ref<Store> store, std::vector<RealisedPath> paths) = 0;
 
     void run(ref<Store> store) override;
 
     bool useDefaultInstallables() override { return !all; }
+};
+
+struct StorePathsCommand : public RealisedPathsCommand
+{
+    StorePathsCommand(bool recursive = false);
+
+    using RealisedPathsCommand::run;
+
+    virtual void run(ref<Store> store, std::vector<StorePath> storePaths) = 0;
+
+    void run(ref<Store> store, std::vector<RealisedPath> paths) override;
 };
 
 /* A command that operates on exactly one store path. */
@@ -215,6 +226,12 @@ StorePath toStorePath(ref<Store> store,
 std::set<StorePath> toDerivations(ref<Store> store,
     std::vector<std::shared_ptr<Installable>> installables,
     bool useDeriver = false);
+
+std::set<RealisedPath> toRealisedPaths(
+    ref<Store> store,
+    Realise mode,
+    OperateOn operateOn,
+    std::vector<std::shared_ptr<Installable>> installables);
 
 /* Helper function to generate args that invoke $EDITOR on
    filename:lineno. */

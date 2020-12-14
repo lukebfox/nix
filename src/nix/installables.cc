@@ -691,23 +691,35 @@ Buildables build(ref<Store> store, Realise mode,
     return buildables;
 }
 
-StorePathSet toStorePaths(ref<Store> store,
-    Realise mode, OperateOn operateOn,
+std::set<RealisedPath> toRealisedPaths(
+    ref<Store> store,
+    Realise mode,
+    OperateOn operateOn,
     std::vector<std::shared_ptr<Installable>> installables)
 {
-    StorePathSet outPaths;
-
+    std::set<RealisedPath> res;
     if (operateOn == OperateOn::Output) {
         for (auto & b : build(store, mode, installables))
             std::visit(overloaded {
                 [&](BuildableOpaque bo) {
-                    outPaths.insert(bo.path);
+                    res.insert(bo.path);
                 },
                 [&](BuildableFromDrv bfd) {
                     for (auto & output : bfd.outputs) {
-                        if (!output.second)
-                            throw Error("Cannot operate on output of unbuilt CA drv");
-                        outPaths.insert(*output.second);
+                        if (settings.isExperimentalFeatureEnabled("ca-derivations")) {
+                            auto outputId = DrvOutput{bfd.drvPath, output.first};
+                            auto realisation = store->queryRealisation(outputId);
+                            if (!realisation)
+                                throw Error("Cannot operate on output of unbuilt CA drv %s", outputId.to_string());
+                            res.insert(RealisedPath{*realisation});
+                        }
+                        else {
+                            // If ca-derivations isn't enabled, behave as if
+                            // all the paths are opaque to keep the default
+                            // behavior
+                            assert(output.second);
+                            res.insert(*output.second);
+                        }
                     }
                 },
             }, b);
@@ -718,9 +730,19 @@ StorePathSet toStorePaths(ref<Store> store,
         for (auto & i : installables)
             for (auto & b : i->toBuildables())
                 if (auto bfd = std::get_if<BuildableFromDrv>(&b))
-                    outPaths.insert(bfd->drvPath);
+                    res.insert(bfd->drvPath);
     }
 
+    return res;
+}
+
+StorePathSet toStorePaths(ref<Store> store,
+    Realise mode, OperateOn operateOn,
+    std::vector<std::shared_ptr<Installable>> installables)
+{
+    StorePathSet outPaths;
+    for (auto & path : toRealisedPaths(store, mode, operateOn, installables))
+            outPaths.insert(path.path());
     return outPaths;
 }
 
